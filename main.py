@@ -1,16 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict
 from datetime import datetime
+from openai import OpenAI
 import json
 import os
-
-from openai import OpenAI
 
 app = FastAPI()
 
 client = OpenAI(
-    api_key=os.environ["OPENAI_API_KEY"]
+    api_key=os.environ["OPENAI_API_KEY"],
+    base_url="https://aipipe.org/openai/v1"
 )
 
 class ExtractRequest(BaseModel):
@@ -32,17 +32,17 @@ Rules:
    - integer
    - float
    - boolean
-   - date (YYYY-MM-DD)
+   - date
    - array[string]
    - array[integer]
-7. Integers and floats must be JSON numbers.
-8. Booleans must be true/false.
-9. Dates must be ISO format YYYY-MM-DD.
+7. Dates must be YYYY-MM-DD.
+8. Integers and floats must be JSON numbers.
+9. Booleans must be true or false.
 """
 
 
 @app.get("/")
-def root():
+def health():
     return {"status": "ok"}
 
 
@@ -56,57 +56,63 @@ TEXT:
 SCHEMA:
 {json.dumps(req.schema, indent=2)}
 
-Return only JSON matching the schema exactly.
+Extract the fields from the text.
+
+Return ONLY JSON matching the schema exactly.
 """
 
         response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
+            temperature=0,
+            response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            response_format={"type": "json_object"}
+            ]
         )
 
         result = json.loads(response.choices[0].message.content)
 
         validated = {}
 
-        for key, typ in req.schema.items():
+        for key, field_type in req.schema.items():
             value = result.get(key)
 
             if value is None:
                 validated[key] = None
                 continue
 
-            if typ == "string":
-                validated[key] = str(value)
-
-            elif typ == "integer":
-                validated[key] = int(value)
-
-            elif typ == "float":
-                validated[key] = float(value)
-
-            elif typ == "boolean":
-                validated[key] = bool(value)
-
-            elif typ == "date":
-                try:
-                    dt = datetime.fromisoformat(str(value))
-                    validated[key] = dt.strftime("%Y-%m-%d")
-                except:
+            try:
+                if field_type == "string":
                     validated[key] = str(value)
 
-            elif typ == "array[string]":
-                validated[key] = [str(x) for x in value]
+                elif field_type == "integer":
+                    validated[key] = int(value)
 
-            elif typ == "array[integer]":
-                validated[key] = [int(x) for x in value]
+                elif field_type == "float":
+                    validated[key] = float(value)
 
-            else:
-                validated[key] = value
+                elif field_type == "boolean":
+                    validated[key] = bool(value)
+
+                elif field_type == "date":
+                    try:
+                        dt = datetime.fromisoformat(str(value))
+                        validated[key] = dt.strftime("%Y-%m-%d")
+                    except:
+                        validated[key] = str(value)
+
+                elif field_type == "array[string]":
+                    validated[key] = [str(x) for x in value]
+
+                elif field_type == "array[integer]":
+                    validated[key] = [int(x) for x in value]
+
+                else:
+                    validated[key] = value
+
+            except:
+                validated[key] = None
 
         return validated
 
